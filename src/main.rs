@@ -218,6 +218,9 @@ fn remap_key(key: u64) -> Option<u64> {
         VK_PERIOD => Some(VK_V),   // . -> V
         VK_SLASH => Some(VK_Z),    // / -> Z
         VK_BACKSLASH => Some(VK_BACKSLASH), // \ stays \\ 
+        // Number-row punctuation: map '-' and '=' to bracket keys so they produce Dvorak brackets
+        VK_MINUS => Some(VK_LEFTBRACKET),       // '-' -> '['  (and shift '{')
+        VK_ANSI_EQUALS => Some(VK_RIGHTBRACKET),// '=' -> ']'  (and shift '}')
         // Digits (identity mapping)
         VK_ANSI_1 | VK_ANSI_2 | VK_ANSI_3 | VK_ANSI_4 |
         VK_ANSI_5 | VK_ANSI_6 | VK_ANSI_7 | VK_ANSI_8 |

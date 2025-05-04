@@ -1,6 +1,9 @@
 // A macOS keyboard remapper from QWERTY to Dvorak when Command or Control are not pressed.
 use std::os::raw::c_void;
 use std::ptr;
+use std::{env, fs, io, process};
+use std::io::Write;
+use std::error::Error;
 
 // CoreGraphics types and constants
 type CGEventTapLocation = u32;
@@ -241,7 +244,6 @@ unsafe extern "C" fn event_tap_callback(
         if flags & (K_CG_EVENT_FLAG_MASK_COMMAND | K_CG_EVENT_FLAG_MASK_CONTROL) == 0 {
             let keycode = CGEventGetIntegerValueField(event, K_CG_KEYBOARD_EVENT_KEYCODE) as u64;
             if let Some(mapped) = remap_key(keycode) {
-                println!("remapping {} to {}", keycode, mapped);
                 CGEventSetIntegerValueField(event, K_CG_KEYBOARD_EVENT_KEYCODE, mapped as i64);
             }
         }
@@ -249,10 +251,100 @@ unsafe extern "C" fn event_tap_callback(
     event
 }
 
+// Entry point: dispatch based on subcommand
 fn main() {
+    let mut args = env::args().skip(1);
+    match args.next().as_deref() {
+        Some("install") => {
+            if let Err(e) = do_install() {
+                eprintln!("Install failed: {}", e);
+                process::exit(1);
+            }
+        }
+        Some("uninstall") => {
+            if let Err(e) = do_uninstall() {
+                eprintln!("Uninstall failed: {}", e);
+                process::exit(1);
+            }
+        }
+        Some("help") | Some("--help") | Some("-h") => {
+            print_help();
+        }
+        Some(cmd) => {
+            eprintln!("Unknown command: {}", cmd);
+            print_help();
+            process::exit(1);
+        }
+        None => {
+            run_tap();
+        }
+    }
+}
+
+// Print usage
+fn print_help() {
+    eprintln!("Usage:");
+    eprintln!("  macos_keyboard_remapper install   # setup LaunchAgent");
+    eprintln!("  macos_keyboard_remapper uninstall # remove LaunchAgent");
+    eprintln!("  macos_keyboard_remapper           # run daemon (default)");
+}
+
+// Install as a LaunchAgent
+fn do_install() -> Result<(), Box<dyn Error>> {
+    let exe = env::current_exe()?;
+    let home = env::var("HOME")?;
+    let la_dir = format!("{}/Library/LaunchAgents", home);
+    fs::create_dir_all(&la_dir)?;
+    let plist_path = format!("{}/com.macos_keyboard_remapper.plist", la_dir);
+    let plist = format!(r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.macos_keyboard_remapper</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{}</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/tmp/macos_keyboard_remapper.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/macos_keyboard_remapper.log</string>
+</dict>
+</plist>
+"#, exe.display());
+    fs::write(&plist_path, plist)?;
+    // Reload agent
+    let _ = process::Command::new("launchctl")
+        .args(&["unload", &plist_path])
+        .output();
+    let out = process::Command::new("launchctl")
+        .args(&["load", &plist_path])
+        .output()?;
+    io::stdout().write_all(&out.stdout)?;
+    Ok(())
+}
+
+// Uninstall LaunchAgent
+fn do_uninstall() -> Result<(), Box<dyn Error>> {
+    let home = env::var("HOME")?;
+    let plist_path = format!("{}/Library/LaunchAgents/com.macos_keyboard_remapper.plist", home);
+    let _ = process::Command::new("launchctl")
+        .args(&["unload", &plist_path])
+        .output();
+    fs::remove_file(plist_path)?;
+    Ok(())
+}
+
+// Run the keyboard remapping event tap (never returns)
+fn run_tap() -> ! {
     unsafe {
-        // Listen for key down and key up events
-        let mask = cg_event_mask_bit(K_CG_EVENT_KEY_DOWN) | cg_event_mask_bit(K_CG_EVENT_KEY_UP);
+        let mask = cg_event_mask_bit(K_CG_EVENT_KEY_DOWN)
+            | cg_event_mask_bit(K_CG_EVENT_KEY_UP);
         let tap = CGEventTapCreate(
             K_CG_HID_EVENT_TAP,
             K_CG_HEAD_INSERT_EVENT_TAP,
@@ -263,13 +355,13 @@ fn main() {
         );
         if tap.is_null() {
             eprintln!("Failed to create event tap. Make sure to grant accessibility permissions.");
-            std::process::exit(1);
+            process::exit(1);
         }
         let source = CFMachPortCreateRunLoopSource(ptr::null(), tap, 0);
         let run_loop = CFRunLoopGetCurrent();
         CFRunLoopAddSource(run_loop, source, kCFRunLoopCommonModes);
-        // Enable and run
         CGEventTapEnable(tap, true);
         CFRunLoopRun();
+        process::exit(0);
     }
 }

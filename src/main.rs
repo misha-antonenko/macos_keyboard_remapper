@@ -1,8 +1,10 @@
 // A macOS keyboard remapper from QWERTY to Dvorak when Command or Control are not pressed.
 use std::os::raw::c_void;
 use std::ptr;
-use std::{env, fs, io, process};
-use std::io::Write;
+use std::{env, fs, process};
+use clap::{Parser, Subcommand};
+use tracing::{info, error, debug};
+use tracing_subscriber::EnvFilter;
 use std::error::Error;
 
 // CoreGraphics types and constants
@@ -78,6 +80,22 @@ extern "C" {
     );
     fn CFRunLoopRun();
     static kCFRunLoopCommonModes: CFStringRef;
+}
+
+// Command-line interface
+#[derive(Parser)]
+#[command(name = "macos_keyboard_remapper", version, about = "Remap QWERTY to Dvorak on macOS")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Install as a LaunchAgent (auto-start at login)
+    Install,
+    /// Remove the LaunchAgent
+    Uninstall,
 }
 // Key code constants (from HIToolbox/Events.h, kVK_*):
 const VK_A: u64 = 0;
@@ -244,6 +262,7 @@ unsafe extern "C" fn event_tap_callback(
         if flags & (K_CG_EVENT_FLAG_MASK_COMMAND | K_CG_EVENT_FLAG_MASK_CONTROL) == 0 {
             let keycode = CGEventGetIntegerValueField(event, K_CG_KEYBOARD_EVENT_KEYCODE) as u64;
             if let Some(mapped) = remap_key(keycode) {
+                debug!("remapping key {} to {}", keycode, mapped);
                 CGEventSetIntegerValueField(event, K_CG_KEYBOARD_EVENT_KEYCODE, mapped as i64);
             }
         }
@@ -251,29 +270,25 @@ unsafe extern "C" fn event_tap_callback(
     event
 }
 
-// Entry point: dispatch based on subcommand
 fn main() {
-    let mut args = env::args().skip(1);
-    match args.next().as_deref() {
-        Some("install") => {
+    // Initialize tracing subscriber (logs to stderr by default)
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
+    // Parse command-line arguments
+    let cli = Cli::parse();
+    match cli.command {
+        Some(Commands::Install) => {
             if let Err(e) = do_install() {
-                eprintln!("Install failed: {}", e);
+                error!(%e, "Install failed");
                 process::exit(1);
             }
         }
-        Some("uninstall") => {
+        Some(Commands::Uninstall) => {
             if let Err(e) = do_uninstall() {
-                eprintln!("Uninstall failed: {}", e);
+                error!(%e, "Uninstall failed");
                 process::exit(1);
             }
-        }
-        Some("help") | Some("--help") | Some("-h") => {
-            print_help();
-        }
-        Some(cmd) => {
-            eprintln!("Unknown command: {}", cmd);
-            print_help();
-            process::exit(1);
         }
         None => {
             run_tap();
@@ -281,13 +296,6 @@ fn main() {
     }
 }
 
-// Print usage
-fn print_help() {
-    eprintln!("Usage:");
-    eprintln!("  macos_keyboard_remapper install   # setup LaunchAgent");
-    eprintln!("  macos_keyboard_remapper uninstall # remove LaunchAgent");
-    eprintln!("  macos_keyboard_remapper           # run daemon (default)");
-}
 
 // Install as a LaunchAgent
 fn do_install() -> Result<(), Box<dyn Error>> {
@@ -317,15 +325,21 @@ fn do_install() -> Result<(), Box<dyn Error>> {
 </dict>
 </plist>
 "#, exe.display());
+    // Write the LaunchAgent plist
     fs::write(&plist_path, plist)?;
+    info!("Created LaunchAgent plist at {}", plist_path);
     // Reload agent
+    // Unload any existing agent
+    info!("Unloading existing LaunchAgent (if any)");
     let _ = process::Command::new("launchctl")
         .args(&["unload", &plist_path])
         .output();
-    let out = process::Command::new("launchctl")
+    // Load the new agent
+    info!("Loading LaunchAgent");
+    let _ = process::Command::new("launchctl")
         .args(&["load", &plist_path])
         .output()?;
-    io::stdout().write_all(&out.stdout)?;
+    info!("LaunchAgent installed and loaded");
     Ok(())
 }
 
@@ -333,10 +347,14 @@ fn do_install() -> Result<(), Box<dyn Error>> {
 fn do_uninstall() -> Result<(), Box<dyn Error>> {
     let home = env::var("HOME")?;
     let plist_path = format!("{}/Library/LaunchAgents/com.macos_keyboard_remapper.plist", home);
+    // Unload the LaunchAgent
+    info!("Unloading LaunchAgent");
     let _ = process::Command::new("launchctl")
         .args(&["unload", &plist_path])
         .output();
-    fs::remove_file(plist_path)?;
+    // Remove the plist file
+    fs::remove_file(&plist_path)?;
+    info!("LaunchAgent removed (plist deleted)");
     Ok(())
 }
 
@@ -354,7 +372,7 @@ fn run_tap() -> ! {
             ptr::null_mut(),
         );
         if tap.is_null() {
-            eprintln!("Failed to create event tap. Make sure to grant accessibility permissions.");
+            error!("Failed to create event tap. Make sure to grant accessibility permissions.");
             process::exit(1);
         }
         let source = CFMachPortCreateRunLoopSource(ptr::null(), tap, 0);

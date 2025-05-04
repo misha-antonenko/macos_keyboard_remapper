@@ -2,6 +2,8 @@
 name = "macos_keyboard_remapper"
 version = "0.1.0"
 edition = "2021"
+description = "remap keys from the US QWERTY layout to Dvorak layout on macOS"
+license = "MIT"
 
 [dependencies]
 clap = { version = "4.2", features = ["derive"] }

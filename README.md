@@ -1,5 +1,10 @@
 # `macos_keyboard_remapper`: remap QWERTY to Dvorak on macOS
 
+[![Crates.io][crates-badge]][crates-url]
+
+[crates-badge]: https://img.shields.io/crates/v/macos_keyboard_remapper.svg
+[crates-url]: https://crates.io/crates/macos_keyboard_remapper
+
 this simple macOS daemon will remap keys from the US QWERTY layout to Dvorak layout _iff_
 no "control" or "command" keys are pressed. this is done in order to preserve compatibility
 with apps that define their keybindings relative to QWERTY.

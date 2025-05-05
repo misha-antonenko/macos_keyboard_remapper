@@ -54,7 +54,6 @@ unsafe extern "C" {
         userInfo: *mut c_void,
     ) -> CFMachPortRef;
     fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
-    // fn CGEventMaskBit(event: CGEventType) -> CGEventMask; // C macro, not an actual symbol
     fn CGEventGetFlags(event: CGEventRef) -> CGEventFlags;
     fn CGEventGetIntegerValueField(event: CGEventRef, field: CGEventField) -> i64;
     fn CGEventSetIntegerValueField(event: CGEventRef, field: CGEventField, value: i64);

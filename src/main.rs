@@ -293,6 +293,7 @@ fn main() {
     // Initialize tracing subscriber (logs to stderr by default)
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
+        .with_ansi(false)
         .init();
     // Parse command-line arguments
     let cli = Cli::parse();

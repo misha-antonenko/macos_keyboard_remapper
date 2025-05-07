@@ -4,7 +4,7 @@ use std::error::Error;
 use std::os::raw::c_void;
 use std::ptr;
 use std::{env, fs, process};
-use tracing::{debug, error, info};
+use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 // CoreGraphics types and constants
@@ -281,7 +281,6 @@ unsafe extern "C" fn event_tap_callback(
                 let keycode =
                     CGEventGetIntegerValueField(event, K_CG_KEYBOARD_EVENT_KEYCODE) as u64;
                 if let Some(mapped) = remap_key(keycode) {
-                    debug!("remapping key {} to {}", keycode, mapped);
                     CGEventSetIntegerValueField(event, K_CG_KEYBOARD_EVENT_KEYCODE, mapped as i64);
                 }
             }

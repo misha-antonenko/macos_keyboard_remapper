@@ -170,33 +170,6 @@ unsafe extern "C" {
 use std::ffi::CStr;
 const K_CFSTRING_ENCODING_UTF8: u32 = 0x08000100;
 
-/// Convert CFStringRef to Rust String (UTF-8), or None on failure
-fn cfstring_to_string(cf_str: CFStringRef) -> Option<String> {
-    unsafe {
-        if cf_str.is_null() {
-            return None;
-        }
-        let ptr = CFStringGetCStringPtr(cf_str, K_CFSTRING_ENCODING_UTF8);
-        if !ptr.is_null() {
-            if let Ok(s) = CStr::from_ptr(ptr).to_str() {
-                return Some(s.to_owned());
-            }
-        }
-        let mut buf = [0i8; 256];
-        if CFStringGetCString(
-            cf_str,
-            buf.as_mut_ptr(),
-            buf.len() as isize,
-            K_CFSTRING_ENCODING_UTF8,
-        ) {
-            if let Ok(s) = CStr::from_ptr(buf.as_ptr()).to_str() {
-                return Some(s.to_owned());
-            }
-        }
-        None
-    }
-}
-
 /// Returns true if current keyboard layout is US QWERTY
 fn is_us_qwerty() -> bool {
     unsafe {
@@ -204,13 +177,34 @@ fn is_us_qwerty() -> bool {
         if src.is_null() {
             return false;
         }
+
         let id_cf = TISGetInputSourceProperty(src, kTISPropertyInputSourceID);
-        let id = cfstring_to_string(id_cf);
-        CFRelease(src as *const c_void);
-        if let Some(s) = id {
-            return s == "com.apple.keyboardlayout.US" || s == "com.apple.keylayout.US";
+        let mut is_us = false;
+        let ptr = CFStringGetCStringPtr(id_cf, K_CFSTRING_ENCODING_UTF8);
+        if !ptr.is_null() {
+            if let Ok(s) = CStr::from_ptr(ptr).to_str() {
+                if s == "com.apple.keyboardlayout.US" || s == "com.apple.keylayout.US" {
+                    is_us = true;
+                }
+            }
+        } else {
+            let mut buf = [0i8; 256];
+            if CFStringGetCString(
+                id_cf,
+                buf.as_mut_ptr(),
+                buf.len() as isize,
+                K_CFSTRING_ENCODING_UTF8,
+            ) {
+                if let Ok(s) = CStr::from_ptr(buf.as_ptr()).to_str() {
+                    if s == "com.apple.keyboardlayout.US" || s == "com.apple.keylayout.US" {
+                        is_us = true;
+                    }
+                }
+            }
         }
-        false
+
+        CFRelease(src as *const c_void);
+        is_us
     }
 }
 

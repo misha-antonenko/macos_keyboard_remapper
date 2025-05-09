@@ -1,6 +1,7 @@
 // A macOS keyboard remapper from QWERTY to Dvorak when Command or Control are not pressed.
 use clap::{Parser, Subcommand};
 use std::error::Error;
+use std::hint::black_box;
 use std::os::raw::c_void;
 use std::ptr;
 use std::{env, fs, process};
@@ -268,6 +269,7 @@ unsafe extern "C" fn event_tap_callback(
     event: CGEventRef,
     _user_info: *mut c_void,
 ) -> CGEventRef {
+    let mut remapped = false;
     if type_ == K_CG_EVENT_KEY_DOWN || type_ == K_CG_EVENT_KEY_UP {
         unsafe {
             let flags = CGEventGetFlags(event);
@@ -276,9 +278,14 @@ unsafe extern "C" fn event_tap_callback(
                     CGEventGetIntegerValueField(event, K_CG_KEYBOARD_EVENT_KEYCODE) as u64;
                 if let Some(mapped) = remap_key(keycode) {
                     CGEventSetIntegerValueField(event, K_CG_KEYBOARD_EVENT_KEYCODE, mapped as i64);
+                    remapped = true;
                 }
             }
         }
+    }
+    if !remapped {
+        // warm up
+        black_box(is_us_qwerty());
     }
     event
 }

@@ -1,82 +1,16 @@
 // A macOS keyboard remapper from QWERTY to Dvorak when Command or Control are not pressed.
 use clap::{Parser, Subcommand};
 use std::error::Error;
-use std::hint::black_box;
+use core_foundation::runloop::{CFRunLoop, kCFRunLoopCommonModes};
+use core_foundation::string::CFStringRef;
+use core_graphics::event::{
+    CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
+    CGEventType, EventField,
+};
 use std::os::raw::c_void;
-use std::ptr;
 use std::{env, fs, process};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
-
-// CoreGraphics types and constants
-type CGEventTapLocation = u32;
-type CGEventTapPlacement = u32;
-type CGEventTapOptions = u32;
-type CGEventMask = u64;
-type CGEventType = u32;
-type CGEventField = u32;
-type CGEventFlags = u64;
-type CGEventTapProxy = *mut c_void;
-type CGEventRef = *mut c_void;
-type CFMachPortRef = *mut c_void;
-type CFRunLoopSourceRef = *mut c_void;
-type CFRunLoopRef = *mut c_void;
-type CFStringRef = *const c_void;
-type CFAllocatorRef = *const c_void;
-// Callback signature
-type CGEventTapCallBack = unsafe extern "C" fn(
-    proxy: CGEventTapProxy,
-    type_: CGEventType,
-    event: CGEventRef,
-    user_info: *mut c_void,
-) -> CGEventRef;
-
-// Event types
-const K_CG_EVENT_KEY_DOWN: CGEventType = 10;
-const K_CG_EVENT_KEY_UP: CGEventType = 11;
-// Event fields
-const K_CG_KEYBOARD_EVENT_KEYCODE: CGEventField = 9;
-// Tap configuration: event tap location (use HID-level)
-const K_CG_HID_EVENT_TAP: CGEventTapLocation = 0;
-const K_CG_HEAD_INSERT_EVENT_TAP: CGEventTapPlacement = 0;
-const K_CG_EVENT_TAP_OPTION_DEFAULT: CGEventTapOptions = 0;
-// Flags to ignore remapping when pressed
-const K_CG_EVENT_FLAG_MASK_COMMAND: CGEventFlags = 1 << 20;
-const K_CG_EVENT_FLAG_MASK_CONTROL: CGEventFlags = 1 << 18;
-
-#[link(name = "CoreGraphics", kind = "framework")]
-unsafe extern "C" {
-    fn CGEventTapCreate(
-        tap: CGEventTapLocation,
-        place: CGEventTapPlacement,
-        options: CGEventTapOptions,
-        eventsOfInterest: CGEventMask,
-        callback: CGEventTapCallBack,
-        userInfo: *mut c_void,
-    ) -> CFMachPortRef;
-    fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
-    fn CGEventGetFlags(event: CGEventRef) -> CGEventFlags;
-    fn CGEventGetIntegerValueField(event: CGEventRef, field: CGEventField) -> i64;
-    fn CGEventSetIntegerValueField(event: CGEventRef, field: CGEventField, value: i64);
-}
-
-/// Compute an event mask bit (equivalent to C macro CGEventMaskBit)
-fn cg_event_mask_bit(event: CGEventType) -> CGEventMask {
-    1u64 << event
-}
-
-#[link(name = "CoreFoundation", kind = "framework")]
-unsafe extern "C" {
-    fn CFMachPortCreateRunLoopSource(
-        allocator: CFAllocatorRef,
-        port: CFMachPortRef,
-        order: isize,
-    ) -> CFRunLoopSourceRef;
-    fn CFRunLoopGetCurrent() -> CFRunLoopRef;
-    fn CFRunLoopAddSource(runLoop: CFRunLoopRef, source: CFRunLoopSourceRef, mode: CFStringRef);
-    fn CFRunLoopRun();
-    static kCFRunLoopCommonModes: CFStringRef;
-}
 
 // Command-line interface
 #[derive(Parser)]
@@ -262,34 +196,6 @@ fn remap_key(key: u64) -> Option<u64> {
     }
 }
 
-// Event tap callback: remap keys when neither Command nor Control is pressed
-unsafe extern "C" fn event_tap_callback(
-    _proxy: CGEventTapProxy,
-    type_: CGEventType,
-    event: CGEventRef,
-    _user_info: *mut c_void,
-) -> CGEventRef {
-    let mut remapped = false;
-    if type_ == K_CG_EVENT_KEY_DOWN || type_ == K_CG_EVENT_KEY_UP {
-        unsafe {
-            let flags = CGEventGetFlags(event);
-            if flags & (K_CG_EVENT_FLAG_MASK_COMMAND | K_CG_EVENT_FLAG_MASK_CONTROL) == 0 {
-                let keycode =
-                    CGEventGetIntegerValueField(event, K_CG_KEYBOARD_EVENT_KEYCODE) as u64;
-                if let Some(mapped) = remap_key(keycode) {
-                    CGEventSetIntegerValueField(event, K_CG_KEYBOARD_EVENT_KEYCODE, mapped as i64);
-                    remapped = true;
-                }
-            }
-        }
-    }
-    if !remapped {
-        // warm up
-        black_box(is_us_qwerty());
-    }
-    event
-}
-
 fn main() {
     // Initialize tracing subscriber (logs to stderr by default)
     tracing_subscriber::fmt()
@@ -384,27 +290,47 @@ fn do_uninstall() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-// Run the keyboard remapping event tap (never returns)
+/// Run the keyboard remapping event tap (never returns)
 fn run_tap() -> ! {
-    unsafe {
-        let mask = cg_event_mask_bit(K_CG_EVENT_KEY_DOWN) | cg_event_mask_bit(K_CG_EVENT_KEY_UP);
-        let tap = CGEventTapCreate(
-            K_CG_HID_EVENT_TAP,
-            K_CG_HEAD_INSERT_EVENT_TAP,
-            K_CG_EVENT_TAP_OPTION_DEFAULT,
-            mask,
-            event_tap_callback,
-            ptr::null_mut(),
-        );
-        if tap.is_null() {
-            error!("Failed to create event tap. Make sure to grant accessibility permissions.");
-            process::exit(1);
-        }
-        let source = CFMachPortCreateRunLoopSource(ptr::null(), tap, 0);
-        let run_loop = CFRunLoopGetCurrent();
-        CFRunLoopAddSource(run_loop, source, kCFRunLoopCommonModes);
-        CGEventTapEnable(tap, true);
-        CFRunLoopRun();
-        process::exit(0);
-    }
+    // Create a CGEventTap using the core-graphics wrapper
+    let tap = CGEventTap::new(
+        CGEventTapLocation::HID,
+        CGEventTapPlacement::HeadInsertEventTap,
+        CGEventTapOptions::Default,
+        vec![CGEventType::KeyDown, CGEventType::KeyUp],
+        |_, event_type, event| {
+            if matches!(event_type, CGEventType::KeyDown | CGEventType::KeyUp) {
+                let flags = event.get_flags();
+                if !flags.contains(CGEventFlags::CGEventFlagCommand)
+                    && !flags.contains(CGEventFlags::CGEventFlagControl)
+                {
+                    let keycode =
+                        event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u64;
+                    if let Some(mapped) = remap_key(keycode) {
+                        event.set_integer_value_field(
+                            EventField::KEYBOARD_EVENT_KEYCODE,
+                            mapped as i64,
+                        );
+                        return Some(event.clone());
+                    }
+                }
+            }
+            // Warm up the US-QWERTY check
+            let _ = is_us_qwerty();
+            None
+        },
+    )
+    .expect("Failed to create event tap. Make sure to grant accessibility permissions.");
+
+    // Add the event tap to the current run loop
+    let run_loop = CFRunLoop::get_current();
+    let source = tap
+        .mach_port
+        .create_runloop_source(0)
+        .expect("Failed to create run loop source");
+    // Add the source to the run loop
+    unsafe { run_loop.add_source(&source, kCFRunLoopCommonModes) };
+    tap.enable();
+    CFRunLoop::run_current();
+    process::exit(0);
 }

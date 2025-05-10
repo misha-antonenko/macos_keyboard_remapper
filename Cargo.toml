@@ -10,3 +10,5 @@ repository = "https://github.com/misha-antonenko/macos_keyboard_remapper"
 clap = { version = "4.2", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+core-graphics = "0.24"
+core-foundation = "0.10"

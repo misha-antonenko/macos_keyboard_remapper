@@ -1,12 +1,12 @@
 // A macOS keyboard remapper from QWERTY to Dvorak when Command or Control are not pressed.
 use clap::{Parser, Subcommand};
-use std::error::Error;
 use core_foundation::runloop::{CFRunLoop, kCFRunLoopCommonModes};
 use core_foundation::string::CFStringRef;
 use core_graphics::event::{
     CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
     CGEventType, EventField,
 };
+use std::error::Error;
 use std::os::raw::c_void;
 use std::{env, fs, process};
 use tracing::{error, info};
@@ -297,23 +297,35 @@ fn run_tap() -> ! {
         CGEventTapLocation::HID,
         CGEventTapPlacement::HeadInsertEventTap,
         CGEventTapOptions::Default,
-        vec![CGEventType::KeyDown, CGEventType::KeyUp],
+        vec![
+            CGEventType::KeyDown,
+            CGEventType::KeyUp,
+            CGEventType::TapDisabledByTimeout,
+            CGEventType::TapDisabledByUserInput,
+        ],
         |_, event_type, event| {
-            if matches!(event_type, CGEventType::KeyDown | CGEventType::KeyUp) {
-                let flags = event.get_flags();
-                if !flags.contains(CGEventFlags::CGEventFlagCommand)
-                    && !flags.contains(CGEventFlags::CGEventFlagControl)
-                {
-                    let keycode =
-                        event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u64;
-                    if let Some(mapped) = remap_key(keycode) {
-                        event.set_integer_value_field(
-                            EventField::KEYBOARD_EVENT_KEYCODE,
-                            mapped as i64,
-                        );
-                        return Some(event.clone());
+            match event_type {
+                CGEventType::KeyDown | CGEventType::KeyUp => {
+                    let flags = event.get_flags();
+                    if !flags.contains(CGEventFlags::CGEventFlagCommand)
+                        && !flags.contains(CGEventFlags::CGEventFlagControl)
+                    {
+                        let keycode = event
+                            .get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE)
+                            as u64;
+                        if let Some(mapped) = remap_key(keycode) {
+                            event.set_integer_value_field(
+                                EventField::KEYBOARD_EVENT_KEYCODE,
+                                mapped as i64,
+                            );
+                            return Some(event.clone());
+                        }
                     }
                 }
+                CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput => {
+                    error!("Event tap disabled; cause: {:?}", event_type);
+                }
+                _ => {}
             }
             // Warm up the US-QWERTY check
             let _ = is_us_qwerty();

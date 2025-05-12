@@ -8,7 +8,6 @@ use core_graphics::event::{
 };
 use std::error::Error;
 use std::os::raw::c_void;
-use std::sync::Mutex;
 use std::{env, fs, process};
 use tracing::{Level, debug, error, info, instrument, warn};
 use tracing_subscriber::EnvFilter;
@@ -298,7 +297,7 @@ fn run_tap() -> ! {
     let tap = CGEventTap::new(
         CGEventTapLocation::AnnotatedSession,
         CGEventTapPlacement::HeadInsertEventTap, // get the events before any other tap
-        CGEventTapOptions::Default, // block events and modify them
+        CGEventTapOptions::Default,              // block events and modify them
         vec![
             CGEventType::KeyDown,
             CGEventType::KeyUp,

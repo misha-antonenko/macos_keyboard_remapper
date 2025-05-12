@@ -294,11 +294,6 @@ fn do_uninstall() -> Result<(), Box<dyn Error>> {
 
 /// Run the keyboard remapping event tap (never returns)
 fn run_tap() -> ! {
-    // TODO: these are cargo cult vibes. i don't really know why, but the remapper seems to cause
-    // some keys to get lost and some to get held. i wondered whether this is because the framework
-    // can run the invocations of the callback in parallel, but could not confirm that
-    let mutex = Mutex::new(());
-
     // Create a CGEventTap using the core-graphics wrapper
     let tap = CGEventTap::new(
         CGEventTapLocation::AnnotatedSession,
@@ -311,7 +306,6 @@ fn run_tap() -> ! {
             CGEventType::TapDisabledByUserInput,
         ],
         |_, event_type, event| {
-            let _lock = mutex.lock().unwrap();
             match event_type {
                 CGEventType::KeyDown | CGEventType::KeyUp => {
                     let keycode =

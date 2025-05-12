@@ -10,7 +10,7 @@ use std::error::Error;
 use std::os::raw::c_void;
 use std::sync::Mutex;
 use std::{env, fs, process};
-use tracing::{debug, error, info, warn};
+use tracing::{Level, debug, error, info, instrument, warn};
 use tracing_subscriber::EnvFilter;
 
 // Command-line interface
@@ -107,7 +107,9 @@ use std::ffi::CStr;
 const K_CFSTRING_ENCODING_UTF8: u32 = 0x08000100;
 
 /// Returns true if current keyboard layout is US QWERTY
+#[instrument(ret, level = Level::DEBUG)]
 fn is_us_qwerty() -> bool {
+    debug!("entered `is_us_qwerty`");
     unsafe {
         let src = TISCopyCurrentKeyboardLayoutInputSource();
         if src.is_null() {
@@ -119,12 +121,9 @@ fn is_us_qwerty() -> bool {
         let mut is_us = false;
         let ptr = CFStringGetCStringPtr(id_cf, K_CFSTRING_ENCODING_UTF8);
         if !ptr.is_null() {
-            if let Ok(s) = CStr::from_ptr(ptr).to_str() {
-                if s == "com.apple.keyboardlayout.US" || s == "com.apple.keylayout.US" {
-                    is_us = true;
-                }
-            } else {
-                error!("Could not decode the keyboard layout name in-place");
+            let s = str::from_utf8_unchecked(CStr::from_ptr(ptr).to_bytes());
+            if s == "com.apple.keyboardlayout.US" || s == "com.apple.keylayout.US" {
+                is_us = true;
             }
         } else {
             let mut buf = [0i8; 256];
@@ -134,12 +133,9 @@ fn is_us_qwerty() -> bool {
                 buf.len() as isize,
                 K_CFSTRING_ENCODING_UTF8,
             ) {
-                if let Ok(s) = CStr::from_ptr(buf.as_ptr()).to_str() {
-                    if s == "com.apple.keyboardlayout.US" || s == "com.apple.keylayout.US" {
-                        is_us = true;
-                    }
-                } else {
-                    error!("Could not decode the keyboard layout name after copying");
+                let s = str::from_utf8_unchecked(CStr::from_ptr(buf.as_ptr()).to_bytes());
+                if s == "com.apple.keyboardlayout.US" || s == "com.apple.keylayout.US" {
+                    is_us = true;
                 }
             }
         }
@@ -305,7 +301,7 @@ fn run_tap() -> ! {
 
     // Create a CGEventTap using the core-graphics wrapper
     let tap = CGEventTap::new(
-        CGEventTapLocation::HID, // the earliest possible time to look at the event
+        CGEventTapLocation::AnnotatedSession,
         CGEventTapPlacement::HeadInsertEventTap, // get the events before any other tap
         CGEventTapOptions::Default, // block events and modify them
         vec![

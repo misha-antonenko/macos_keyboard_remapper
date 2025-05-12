@@ -8,8 +8,9 @@ use core_graphics::event::{
 };
 use std::error::Error;
 use std::os::raw::c_void;
+use std::sync::Mutex;
 use std::{env, fs, process};
-use tracing::{error, info};
+use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 // Command-line interface
@@ -110,6 +111,7 @@ fn is_us_qwerty() -> bool {
     unsafe {
         let src = TISCopyCurrentKeyboardLayoutInputSource();
         if src.is_null() {
+            warn!("No current keyboard layout");
             return false;
         }
 
@@ -121,6 +123,8 @@ fn is_us_qwerty() -> bool {
                 if s == "com.apple.keyboardlayout.US" || s == "com.apple.keylayout.US" {
                     is_us = true;
                 }
+            } else {
+                error!("Could not decode the keyboard layout name in-place");
             }
         } else {
             let mut buf = [0i8; 256];
@@ -134,6 +138,8 @@ fn is_us_qwerty() -> bool {
                     if s == "com.apple.keyboardlayout.US" || s == "com.apple.keylayout.US" {
                         is_us = true;
                     }
+                } else {
+                    error!("Could not decode the keyboard layout name after copying");
                 }
             }
         }
@@ -292,10 +298,11 @@ fn do_uninstall() -> Result<(), Box<dyn Error>> {
 
 /// Run the keyboard remapping event tap (never returns)
 fn run_tap() -> ! {
+    let mutex = Mutex::new(());
     // Create a CGEventTap using the core-graphics wrapper
     let tap = CGEventTap::new(
         CGEventTapLocation::HID,
-        CGEventTapPlacement::HeadInsertEventTap,
+        CGEventTapPlacement::TailAppendEventTap,
         CGEventTapOptions::Default,
         vec![
             CGEventType::KeyDown,
@@ -304,22 +311,27 @@ fn run_tap() -> ! {
             CGEventType::TapDisabledByUserInput,
         ],
         |_, event_type, event| {
+            let _lock = mutex.lock().unwrap();
             match event_type {
                 CGEventType::KeyDown | CGEventType::KeyUp => {
-                    let flags = event.get_flags();
-                    if !flags.contains(CGEventFlags::CGEventFlagCommand)
-                        && !flags.contains(CGEventFlags::CGEventFlagControl)
+                    let keycode =
+                        event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u64;
+                    if (event.get_flags()
+                        & (CGEventFlags::CGEventFlagCommand
+                            | CGEventFlags::CGEventFlagControl
+                            | CGEventFlags::CGEventFlagSecondaryFn))
+                        .is_empty()
                     {
-                        let keycode = event
-                            .get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE)
-                            as u64;
                         if let Some(mapped) = remap_key(keycode) {
+                            debug!("Remapped {} to {}", keycode, mapped);
                             event.set_integer_value_field(
                                 EventField::KEYBOARD_EVENT_KEYCODE,
                                 mapped as i64,
                             );
                             return Some(event.clone());
                         }
+                    } else {
+                        debug!("Did not remap {}", keycode);
                     }
                 }
                 CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput => {
@@ -327,8 +339,6 @@ fn run_tap() -> ! {
                 }
                 _ => {}
             }
-            // Warm up the US-QWERTY check
-            let _ = is_us_qwerty();
             None
         },
     )

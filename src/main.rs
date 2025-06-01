@@ -1,4 +1,4 @@
-// A macOS keyboard remapper from QWERTY to Dvorak when Command or Control are not pressed.
+// A macOS keyboard remapper from Dvorak to QWERTY when Command, Control, or Function keys are pressed.
 use clap::{Parser, Subcommand};
 use core_foundation::runloop::{CFRunLoop, kCFRunLoopCommonModes};
 use core_foundation::string::CFStringRef;
@@ -9,7 +9,7 @@ use core_graphics::event::{
 use std::error::Error;
 use std::os::raw::c_void;
 use std::{env, fs, process};
-use tracing::{Level, debug, error, info, instrument, warn};
+use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 // Command-line interface
@@ -17,7 +17,7 @@ use tracing_subscriber::EnvFilter;
 #[command(
     name = "macos_keyboard_remapper",
     version,
-    about = "Remap QWERTY to Dvorak on macOS"
+    about = "Remap Dvorak to QWERTY on macOS"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -79,7 +79,7 @@ const VK_N: u64 = 45;
 const VK_M: u64 = 46;
 const VK_PERIOD: u64 = 47;
 
-// Text input source detection (to only remap on US QWERTY)
+// Text input source detection (to only remap on Dvorak)
 type TISInputSourceRef = *mut c_void;
 #[link(name = "Carbon", kind = "framework")]
 unsafe extern "C" {
@@ -105,10 +105,17 @@ unsafe extern "C" {
 use std::ffi::CStr;
 const K_CFSTRING_ENCODING_UTF8: u32 = 0x08000100;
 
-/// Returns true if current keyboard layout is US QWERTY
-#[instrument(ret, level = Level::DEBUG)]
-fn is_us_qwerty() -> bool {
-    debug!("entered `is_us_qwerty`");
+fn is_dvorak_name(s: &[u8]) -> bool {
+    if s == "com.apple.keylayout.DVORAK-QWERTYCMD".as_bytes() {
+        true
+    } else {
+        debug!("the layout is actually {:?}", str::from_utf8(s));
+        false
+    }
+}
+
+/// Returns true if current keyboard layout is Dvorak
+fn is_dvorak() -> bool {
     unsafe {
         let src = TISCopyCurrentKeyboardLayoutInputSource();
         if src.is_null() {
@@ -117,13 +124,10 @@ fn is_us_qwerty() -> bool {
         }
 
         let id_cf = TISGetInputSourceProperty(src, kTISPropertyInputSourceID);
-        let mut is_us = false;
         let ptr = CFStringGetCStringPtr(id_cf, K_CFSTRING_ENCODING_UTF8);
-        if !ptr.is_null() {
-            let s = str::from_utf8_unchecked(CStr::from_ptr(ptr).to_bytes());
-            if s == "com.apple.keyboardlayout.US" || s == "com.apple.keylayout.US" {
-                is_us = true;
-            }
+
+        let is_dvorak = if !ptr.is_null() {
+            is_dvorak_name(CStr::from_ptr(ptr).to_bytes())
         } else {
             let mut buf = [0i8; 256];
             if CFStringGetCString(
@@ -132,67 +136,67 @@ fn is_us_qwerty() -> bool {
                 buf.len() as isize,
                 K_CFSTRING_ENCODING_UTF8,
             ) {
-                let s = str::from_utf8_unchecked(CStr::from_ptr(buf.as_ptr()).to_bytes());
-                if s == "com.apple.keyboardlayout.US" || s == "com.apple.keylayout.US" {
-                    is_us = true;
-                }
+                is_dvorak_name(CStr::from_ptr(buf.as_ptr()).to_bytes())
+            } else {
+                false
             }
-        }
+        };
 
         CFRelease(src as *const c_void);
-        is_us
+
+        is_dvorak
     }
 }
 
-// Remap QWERTY keycodes to Dvorak keycodes (only when on US QWERTY layout)
+// Remap Dvorak keycodes to QWERTY keycodes (only when on Dvorak layout)
 fn remap_key(key: u64) -> Option<u64> {
-    if !is_us_qwerty() {
+    if !is_dvorak() {
         return None;
     }
     match key {
-        // Top row
-        VK_Q => Some(VK_QUOTE),                  // Q -> '
-        VK_W => Some(VK_COMMA),                  // W -> ,
-        VK_E => Some(VK_PERIOD),                 // E -> .
-        VK_R => Some(VK_P),                      // R -> P
-        VK_T => Some(VK_Y),                      // T -> Y
-        VK_Y => Some(VK_F),                      // Y -> F
-        VK_U => Some(VK_G),                      // U -> G
-        VK_I => Some(VK_C),                      // I -> C
-        VK_O => Some(VK_R),                      // O -> R
-        VK_P => Some(VK_L),                      // P -> L
-        VK_LEFTBRACKET => Some(VK_SLASH),        // [ -> /
-        VK_RIGHTBRACKET => Some(VK_ANSI_EQUALS), // ] -> =
-        // Home row
-        VK_A => Some(VK_A),         // A -> A
-        VK_S => Some(VK_O),         // S -> O
-        VK_D => Some(VK_E),         // D -> E
-        VK_F => Some(VK_U),         // F -> U
-        VK_G => Some(VK_I),         // G -> I
-        VK_H => Some(VK_D),         // H -> D
-        VK_J => Some(VK_H),         // J -> H
-        VK_K => Some(VK_T),         // K -> T
-        VK_L => Some(VK_N),         // L -> N
-        VK_SEMICOLON => Some(VK_S), // ; -> S
-        VK_QUOTE => Some(VK_MINUS), // ' -> -
-        // Bottom row
-        VK_Z => Some(VK_SEMICOLON),         // Z -> ;
-        VK_X => Some(VK_Q),                 // X -> Q
-        VK_C => Some(VK_J),                 // C -> J
-        VK_V => Some(VK_K),                 // V -> K
-        VK_B => Some(VK_X),                 // B -> X
-        VK_N => Some(VK_B),                 // N -> B
-        VK_M => Some(VK_M),                 // M -> M
-        VK_COMMA => Some(VK_W),             // , -> W
-        VK_PERIOD => Some(VK_V),            // . -> V
-        VK_SLASH => Some(VK_Z),             // / -> Z
-        VK_BACKSLASH => Some(VK_BACKSLASH), // \ stays \\
-        // Number-row punctuation: map '-' and '=' to bracket keys so they produce Dvorak brackets
-        VK_MINUS => Some(VK_LEFTBRACKET), // '-' -> '['  (and shift '{')
-        VK_ANSI_EQUALS => Some(VK_RIGHTBRACKET), // '=' -> ']'  (and shift '}')
-        // Digits (identity mapping)
+        VK_QUOTE => Some(VK_Q),
+        VK_COMMA => Some(VK_W),
+        VK_PERIOD => Some(VK_E),
+        VK_P => Some(VK_R),
+        VK_Y => Some(VK_T),
+        VK_F => Some(VK_Y),
+        VK_G => Some(VK_U),
+        VK_C => Some(VK_I),
+        VK_R => Some(VK_O),
+        VK_L => Some(VK_P),
+        VK_SLASH => Some(VK_LEFTBRACKET),
+        VK_ANSI_EQUALS => Some(VK_RIGHTBRACKET),
+
+        VK_A => Some(VK_A),
+        VK_O => Some(VK_S),
+        VK_E => Some(VK_D),
+        VK_U => Some(VK_F),
+        VK_I => Some(VK_G),
+        VK_D => Some(VK_H),
+        VK_H => Some(VK_J),
+        VK_T => Some(VK_K),
+        VK_N => Some(VK_L),
+        VK_S => Some(VK_SEMICOLON),
+        VK_MINUS => Some(VK_QUOTE),
+
+        VK_SEMICOLON => Some(VK_Z),
+        VK_Q => Some(VK_X),
+        VK_J => Some(VK_C),
+        VK_K => Some(VK_V),
+        VK_X => Some(VK_B),
+        VK_B => Some(VK_N),
+        VK_M => Some(VK_M),
+        VK_W => Some(VK_COMMA),
+        VK_V => Some(VK_PERIOD),
+        VK_Z => Some(VK_SLASH),
+        VK_BACKSLASH => Some(VK_BACKSLASH),
+
+        VK_LEFTBRACKET => Some(VK_MINUS),
+        VK_RIGHTBRACKET => Some(VK_ANSI_EQUALS),
+
         VK_ANSI_1 | VK_ANSI_2 | VK_ANSI_3 | VK_ANSI_4 | VK_ANSI_5 | VK_ANSI_6 | VK_ANSI_7
         | VK_ANSI_8 | VK_ANSI_9 | VK_ANSI_0 => Some(key),
+
         _ => None,
     }
 }
@@ -309,10 +313,8 @@ fn run_tap() -> ! {
                 CGEventType::KeyDown | CGEventType::KeyUp => {
                     let keycode =
                         event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u64;
-                    if (event.get_flags()
-                        & (CGEventFlags::CGEventFlagCommand
-                            | CGEventFlags::CGEventFlagControl
-                            | CGEventFlags::CGEventFlagSecondaryFn))
+                    if !(event.get_flags()
+                        & (CGEventFlags::CGEventFlagControl | CGEventFlags::CGEventFlagSecondaryFn))
                         .is_empty()
                     {
                         if let Some(mapped) = remap_key(keycode) {
@@ -324,7 +326,7 @@ fn run_tap() -> ! {
                             return Some(event.clone());
                         }
                     } else {
-                        debug!("Did not remap {}", keycode);
+                        debug!("Did not remap {}, no modifier keys pressed", keycode);
                     }
                 }
                 CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput => {
